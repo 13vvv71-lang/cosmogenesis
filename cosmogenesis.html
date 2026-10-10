@@ -1,0 +1,742 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<title>Космогенез Мысли v16 — без ядра</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  
+  body {
+    background: #000;
+    color: #e0e0e0;
+    font-family: 'Courier New', monospace;
+    height: 100vh;
+    overflow: hidden;
+  }
+  
+  #topbar {
+    position: fixed;
+    top: 0; left: 0; right: 0;
+    padding: 12px;
+    display: flex;
+    gap: 10px;
+    background: rgba(10, 10, 10, 0.92);
+    backdrop-filter: blur(10px);
+    border-bottom: 1px solid #222;
+    z-index: 100;
+  }
+  
+  #question {
+    flex: 1;
+    background: #1a1a1a;
+    border: 1px solid #333;
+    color: #e0e0e0;
+    padding: 10px 14px;
+    font-family: inherit;
+    font-size: 14px;
+    outline: none;
+    border-radius: 3px;
+  }
+  #question:focus { border-color: #555; }
+  
+  button {
+    background: #1a1a1a;
+    border: 1px solid #333;
+    color: #e0e0e0;
+    padding: 10px 20px;
+    font-family: inherit;
+    font-size: 14px;
+    cursor: pointer;
+    border-radius: 3px;
+    transition: all 0.2s;
+  }
+  button:hover { background: #252525; border-color: #555; }
+  
+  #status {
+    position: fixed;
+    bottom: 14px; left: 14px;
+    font-size: 11px;
+    color: #777;
+    pointer-events: none;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    z-index: 100;
+    background: rgba(0,0,0,0.7);
+    padding: 8px 12px;
+    border-radius: 3px;
+  }
+  
+  #thought-stream {
+    position: fixed;
+    top: 80px; left: 14px;
+    font-size: 11px;
+    color: #888;
+    max-width: 380px;
+    text-align: left;
+    pointer-events: none;
+    line-height: 1.5;
+    font-style: italic;
+    text-shadow: 0 0 10px rgba(0,0,0,0.9);
+    opacity: 0.85;
+    z-index: 100;
+    background: rgba(0,0,0,0.4);
+    padding: 12px;
+    border-radius: 4px;
+    border: 1px solid #1a1a1a;
+    max-height: 200px;
+    overflow: hidden;
+  }
+  
+  #legend {
+    position: fixed;
+    bottom: 14px; right: 14px;
+    font-size: 10px;
+    color: #555;
+    z-index: 100;
+    background: rgba(0,0,0,0.7);
+    padding: 10px;
+    border-radius: 3px;
+    line-height: 1.6;
+  }
+  
+  .legend-item { display: flex; align-items: center; gap: 6px; }
+  .legend-color { width: 10px; height: 10px; border-radius: 50%; }
+  
+  canvas { display: block; }
+</style>
+</head>
+<body>
+
+<div id="topbar">
+  <input id="question" type="text" placeholder="Задай вопрос..." />
+  <button id="run">Генерировать</button>
+  <button id="clear">Очистить</button>
+  <button id="save">Снимок</button>
+</div>
+
+<div id="status">готов</div>
+<div id="thought-stream"></div>
+
+<div id="legend">
+  <div class="legend-item"><div class="legend-color" style="background:#d4a574"></div> Существительное</div>
+  <div class="legend-item"><div class="legend-color" style="background:#74d4a5"></div> Глагол</div>
+  <div class="legend-item"><div class="legend-color" style="background:#a574d4"></div> Прилагательное</div>
+  <div class="legend-item"><div class="legend-color" style="background:#d4d474"></div> Наречие</div>
+  <div class="legend-item"><div class="legend-color" style="background:#666"></div> Другое</div>
+</div>
+
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+    "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+  }
+}
+</script>
+
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
+
+const API_URL = 'http://localhost:1234/v1/chat/completions';
+const MODEL = 'qwen2.5-14b-instruct-1m-abliterated';
+
+const MAX_WORDS = 600;
+const MAX_LINKS = 1800;
+const MAX_TOKENS = 4000;
+
+const questionInput = document.getElementById('question');
+const runBtn = document.getElementById('run');
+const clearBtn = document.getElementById('clear');
+const saveBtn = document.getElementById('save');
+const statusEl = document.getElementById('status');
+const thoughtEl = document.getElementById('thought-stream');
+
+const scene = new THREE.Scene();
+scene.fog = new THREE.FogExp2(0x020208, 0.005);
+
+const camera = new THREE.PerspectiveCamera(60, innerWidth / innerHeight, 0.1, 2000);
+camera.position.set(0, 10, 50);
+
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setSize(innerWidth, innerHeight);
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.setClearColor(0x020208, 1);
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.0;
+document.body.appendChild(renderer.domElement);
+
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true;
+controls.dampingFactor = 0.05;
+controls.minDistance = 5;
+controls.maxDistance = 300;
+controls.autoRotate = true;
+controls.autoRotateSpeed = 0.25;
+
+const composer = new EffectComposer(renderer);
+composer.addPass(new RenderPass(scene, camera));
+composer.addPass(new UnrealBloomPass(
+  new THREE.Vector2(innerWidth, innerHeight), 0.75, 0.35, 0.25
+));
+composer.addPass(new OutputPass());
+
+const nebulae = [];
+
+function createBackground() {
+  const starCount = 4000;
+  const starPos = new Float32Array(starCount * 3);
+  const starCol = new Float32Array(starCount * 3);
+  for (let i = 0; i < starCount; i++) {
+    const r = 60 + Math.random() * 200;
+    const theta = Math.random() * Math.PI * 2;
+    const phi = Math.acos(2 * Math.random() - 1);
+    starPos[i*3] = r * Math.sin(phi) * Math.cos(theta);
+    starPos[i*3+1] = r * Math.sin(phi) * Math.sin(theta);
+    starPos[i*3+2] = r * Math.cos(phi);
+    const b = 0.2 + Math.random() * 0.4;
+    starCol[i*3] = b; starCol[i*3+1] = b; starCol[i*3+2] = b;
+  }
+  const starGeo = new THREE.BufferGeometry();
+  starGeo.setAttribute('position', new THREE.BufferAttribute(starPos, 3));
+  starGeo.setAttribute('color', new THREE.BufferAttribute(starCol, 3));
+  scene.add(new THREE.Points(starGeo, new THREE.PointsMaterial({
+    size: 0.2, vertexColors: true, transparent: true, opacity: 0.7, sizeAttenuation: true
+  })));
+  
+  const colors = [0x1a0a2e, 0x0a1a2e, 0x2e0a1a, 0x0a2e1a, 0x1a1a3e, 0x2e1a0a];
+  for (let i = 0; i < 6; i++) {
+    const mesh = new THREE.Mesh(
+      new THREE.SphereGeometry(15 + Math.random() * 20, 12, 12),
+      new THREE.MeshBasicMaterial({
+        color: colors[i], transparent: true,
+        opacity: 0.07, side: THREE.BackSide, depthWrite: false
+      })
+    );
+    mesh.position.set((Math.random()-0.5)*80, (Math.random()-0.5)*60, (Math.random()-0.5)*80);
+    mesh.userData.rs = (Math.random()-0.5) * 0.0008;
+    scene.add(mesh);
+    nebulae.push(mesh);
+  }
+  
+  const dustCount = 2000;
+  const dustPos = new Float32Array(dustCount * 3);
+  const dustCol = new Float32Array(dustCount * 3);
+  for (let i = 0; i < dustCount; i++) {
+    dustPos[i*3] = (Math.random()-0.5)*120;
+    dustPos[i*3+1] = (Math.random()-0.5)*80;
+    dustPos[i*3+2] = (Math.random()-0.5)*120;
+    const b = 0.1 + Math.random() * 0.15;
+    dustCol[i*3] = b*0.8; dustCol[i*3+1] = b*0.7; dustCol[i*3+2] = b*1.2;
+  }
+  const dustGeo = new THREE.BufferGeometry();
+  dustGeo.setAttribute('position', new THREE.BufferAttribute(dustPos, 3));
+  dustGeo.setAttribute('color', new THREE.BufferAttribute(dustCol, 3));
+  const dust = new THREE.Points(dustGeo, new THREE.PointsMaterial({
+    size: 0.08, vertexColors: true, transparent: true, opacity: 0.5,
+    sizeAttenuation: true, blending: THREE.AdditiveBlending, depthWrite: false
+  }));
+  scene.add(dust);
+  return dust;
+}
+
+const dustCloud = createBackground();
+
+// ❌ ЯДРО УДАЛЕНО ПОЛНОСТЬЮ
+
+const wordVertexShader = `
+  attribute float size;
+  attribute vec3 customColor;
+  attribute float pulse;
+  varying vec3 vColor;
+  varying float vPulse;
+  uniform float time;
+  
+  void main() {
+    vColor = customColor;
+    vPulse = pulse;
+    vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
+    float pulseScale = 1.0 + sin(time * 2.0 + pulse) * 0.2;
+    gl_PointSize = size * pulseScale * (300.0 / -mvPosition.z);
+    gl_Position = projectionMatrix * mvPosition;
+  }
+`;
+
+const wordFragmentShader = `
+  varying vec3 vColor;
+  varying float vPulse;
+  
+  void main() {
+    vec2 uv = gl_PointCoord - 0.5;
+    float dist = length(uv);
+    if (dist > 0.5) discard;
+    
+    float core = smoothstep(0.5, 0.0, dist);
+    float glow = exp(-dist * 4.0) * 0.6;
+    
+    vec3 color = vColor * (core + glow);
+    float alpha = core * 0.9 + glow;
+    
+    gl_FragColor = vec4(color, alpha);
+  }
+`;
+
+const wordGeo = new THREE.BufferGeometry();
+const wordPositions = new Float32Array(MAX_WORDS * 3);
+const wordColors = new Float32Array(MAX_WORDS * 3);
+const wordSizes = new Float32Array(MAX_WORDS);
+const wordPulses = new Float32Array(MAX_WORDS);
+
+wordGeo.setAttribute('position', new THREE.BufferAttribute(wordPositions, 3));
+wordGeo.setAttribute('customColor', new THREE.BufferAttribute(wordColors, 3));
+wordGeo.setAttribute('size', new THREE.BufferAttribute(wordSizes, 1));
+wordGeo.setAttribute('pulse', new THREE.BufferAttribute(wordPulses, 1));
+wordGeo.setDrawRange(0, 0);
+
+const wordMat = new THREE.ShaderMaterial({
+  uniforms: { time: { value: 0 } },
+  vertexShader: wordVertexShader,
+  fragmentShader: wordFragmentShader,
+  transparent: true,
+  depthWrite: false,
+  blending: THREE.AdditiveBlending
+});
+
+const wordPoints = new THREE.Points(wordGeo, wordMat);
+scene.add(wordPoints);
+
+let words = [];
+
+const tokenGeo = new THREE.BufferGeometry();
+const tokenPos = new Float32Array(MAX_TOKENS * 3);
+const tokenCol = new Float32Array(MAX_TOKENS * 3);
+const tokenSizes = new Float32Array(MAX_TOKENS);
+tokenGeo.setAttribute('position', new THREE.BufferAttribute(tokenPos, 3));
+tokenGeo.setAttribute('color', new THREE.BufferAttribute(tokenCol, 3));
+tokenGeo.setAttribute('size', new THREE.BufferAttribute(tokenSizes, 1));
+tokenGeo.setDrawRange(0, 0);
+
+const tokenMat = new THREE.PointsMaterial({
+  size: 0.3, vertexColors: true, transparent: true, opacity: 0.85,
+  blending: THREE.AdditiveBlending, sizeAttenuation: true, depthWrite: false
+});
+const tokenPoints = new THREE.Points(tokenGeo, tokenMat);
+scene.add(tokenPoints);
+
+let tokens = [];
+
+function spawnTokens(origin, color, count = 4) {
+  for (let i = 0; i < count; i++) {
+    if (tokens.length >= MAX_TOKENS) tokens.shift();
+    tokens.push({
+      x: origin.x, y: origin.y, z: origin.z,
+      vx: (Math.random()-0.5)*1.5,
+      vy: (Math.random()-0.5)*1.5,
+      vz: (Math.random()-0.5)*1.5,
+      r: color.r, g: color.g, b: color.b,
+      life: 1.0
+    });
+  }
+}
+
+const linkGeo = new THREE.BufferGeometry();
+const linkPos = new Float32Array(MAX_LINKS * 6);
+const linkCol = new Float32Array(MAX_LINKS * 6);
+linkGeo.setAttribute('position', new THREE.BufferAttribute(linkPos, 3));
+linkGeo.setAttribute('color', new THREE.BufferAttribute(linkCol, 3));
+linkGeo.setDrawRange(0, 0);
+
+const linkLines = new THREE.LineSegments(linkGeo, new THREE.LineBasicMaterial({
+  vertexColors: true, transparent: true, opacity: 0.5,
+  blending: THREE.AdditiveBlending, depthWrite: false
+}));
+scene.add(linkLines);
+
+let links = [];
+
+const POS_PATTERNS = {
+  noun: /(ость|ние|тор|чик|тель|ство|ение|ание|изм|ция|человек|время|место|вещь|идея|мысль|сознание|жизнь|смерть|любовь|страх|радость|боль|свет|тьма|вода|огонь|земля|небо|солнце|луна|звезда|дерево|цветок|камень|гора|река|море|город|дом|улица|книга|слово|язык|народ|страна|мир|бог|дух|душа|сердце|ум|разум|память|сон|реальность|истина|ложь|добро|зло|красота|гармония|хаос|порядок|свобода|судьба|смысл|цель|путь|начало|конец|вопрос|ответ|знание|опыт|сила|энергия|материя|пространство|вселенная|природа|закон|система|структура|процесс|состояние|связь|форма|качество|количество|уровень|этап|фаза|цикл|точка|линия|объём|масса|скорость|температура|давление|частота|волна|поле|квант|атом|молекула|клетка|организм|мозг|ген|код|сигнал|импульс|поток|ритм|звук|голос|музыка|шум|тишина|взгляд|образ|картина|цвет|тень|пламя|искра|дым|туман|облако|дождь|снег|лёд|ветер|буря|гроза|молния|радуга|рассвет|закат|ночь|утро|день|вечер|весна|лето|осень|зима|год|век|эпоха|момент|вечность|пустота|всё|ничто)/i,
+  verb: /(ить|ать|еть|нуть|ти|чь|сти|быть|идти|делать|говорить|знать|видеть|слышать|думать|чувствовать|любить|бояться|жить|умереть|родиться|расти|падать|лететь|течь|гореть|светить|двигаться|стоять|сидеть|лежать|бежать|прыгать|плавать|работать|играть|учиться|читать|писать|создавать|разрушать|менять|помнить|забывать|понимать|верить|надеяться|мечтать|хотеть|мочь|стать|существовать|происходить|начинаться|заканчиваться|продолжаться|развиваться|исчезать|появляться|возникать|дышать|смотреть|слушать|держать|бросать|ловить|нести|строить|ломать|резать|копать|варить|печь|крутить|качать|трясти|бить|толкать|тянуть|рвать|гнуть|сжимать|открывать|закрывать|включать|выключать|ускорять|замедлять|увеличивать|уменьшать|поднимать|опускать|вращать|пульсировать|мерцать|сиять|блестеть|искриться|дымиться|парить|кружиться)/i,
+  adjective: /(ый|ой|ий|ая|ее|ие|ной|большой|маленький|красивый|добрый|злой|светлый|тёмный|горячий|холодный|быстрый|медленный|сильный|слабый|умный|глупый|счастливый|грустный|молодой|старый|новый|живой|мёртвый|настоящий|ложный|важный|простой|сложный|ясный|яркий|глубокий|мелкий|широкий|узкий|длинный|короткий|высокий|низкий|тяжёлый|лёгкий|твёрдый|мягкий|гладкий|мокрый|сухой|чистый|грязный|полный|пустой|открытый|закрытый|свободный|целый|ровный|кривой|прямой|круглый|острый|тупой|тонкий|толстый|прозрачный|мутный|шумный|тихий|громкий|резкий|плавный|близкий|далёкий|ранний|поздний|первый|последний|главный|разный|странный|обычный|редкий|частый|постоянный|временный|вечный|бесконечный|конечный|реальный|воображаемый|возможный|невозможный|вероятный|случайный|необходимый)/i,
+  adverb: /(о|и|быстро|медленно|громко|тихо|сильно|слабо|хорошо|плохо|много|мало|всегда|никогда|иногда|часто|редко|здесь|там|везде|нигде|сейчас|потом|раньше|позже|вверх|вниз|влево|вправо|вперёд|назад|вместе|рядом|далеко|близко|высоко|низко|глубоко|прямо|ровно|плавно|резко|внезапно|постепенно|вечно|временно|постоянно|обычно|странно|просто|сложно|легко|трудно|ясно|точно|полностью|частично|абсолютно|относительно|действительно|возможно|вероятно|необходимо|достаточно|важно|существенно)/i
+};
+
+function detectPOS(w) {
+  w = w.toLowerCase();
+  if (POS_PATTERNS.noun.test(w)) return 'noun';
+  if (POS_PATTERNS.verb.test(w)) return 'verb';
+  if (POS_PATTERNS.adjective.test(w)) return 'adjective';
+  if (POS_PATTERNS.adverb.test(w)) return 'adverb';
+  return 'other';
+}
+
+const POS_COLORS = {
+  noun: new THREE.Color(0xd4a574),
+  verb: new THREE.Color(0x74d4a5),
+  adjective: new THREE.Color(0xa574d4),
+  adverb: new THREE.Color(0xd4d474),
+  other: new THREE.Color(0x666666)
+};
+
+const simCache = new Map();
+function calcSimilarity(a, b) {
+  const key = a < b ? a + '|' + b : b + '|' + a;
+  if (simCache.has(key)) return simCache.get(key);
+  const s1 = new Set(a);
+  const s2 = new Set(b);
+  let inter = 0;
+  s1.forEach(c => { if (s2.has(c)) inter++; });
+  const result = inter / (s1.size + s2.size - inter);
+  simCache.set(key, result);
+  if (simCache.size > 5000) {
+    const firstKey = simCache.keys().next().value;
+    simCache.delete(firstKey);
+  }
+  return result;
+}
+
+function spawnWord(text) {
+  if (words.length >= MAX_WORDS) {
+    words.shift();
+  }
+  
+  let x, y, z;
+  if (words.length === 0) {
+    x = 0; y = 0; z = 0;
+  } else {
+    const last = words[words.length - 1];
+    x = last.x + (Math.random()-0.5) * 10;
+    y = last.y + (Math.random()-0.5) * 10;
+    z = last.z + (Math.random()-0.5) * 10;
+  }
+  
+  const pos = detectPOS(text);
+  const color = POS_COLORS[pos];
+  const size = Math.min(3.0, 0.8 + text.length * 0.15);
+  
+  words.push({
+    x, y, z,
+    vx: (Math.random()-0.5)*0.2,
+    vy: (Math.random()-0.5)*0.2,
+    vz: (Math.random()-0.5)*0.2,
+    r: color.r, g: color.g, b: color.b,
+    size, pulse: Math.random() * Math.PI * 2,
+    pos, text
+  });
+  
+  spawnTokens({x, y, z}, color, 3);
+  
+  const startIdx = Math.max(0, words.length - 7);
+  for (let i = startIdx; i < words.length - 1; i++) {
+    const other = words[i];
+    const dx = x - other.x, dy = y - other.y, dz = z - other.z;
+    const dist = Math.sqrt(dx*dx + dy*dy + dz*dz);
+    const sim = calcSimilarity(text, other.text);
+    const str = Math.max(0.15, 1 - dist / 30) * sim;
+    if (str > 0.2 && links.length < MAX_LINKS) {
+      links.push({ i1: words.length - 1, i2: i, strength: str });
+    }
+  }
+}
+
+function updateWords(dt) {
+  for (let i = 0; i < words.length; i++) {
+    const w = words[i];
+    w.x += w.vx * dt;
+    w.y += w.vy * dt;
+    w.z += w.vz * dt;
+    w.vx *= 0.98; w.vy *= 0.98; w.vz *= 0.98;
+    w.pulse += dt * 2;
+    
+    const i3 = i * 3;
+    wordPositions[i3] = w.x;
+    wordPositions[i3+1] = w.y;
+    wordPositions[i3+2] = w.z;
+    wordColors[i3] = w.r;
+    wordColors[i3+1] = w.g;
+    wordColors[i3+2] = w.b;
+    wordSizes[i] = w.size;
+    wordPulses[i] = w.pulse;
+  }
+  
+  wordGeo.setDrawRange(0, words.length);
+  wordGeo.attributes.position.needsUpdate = true;
+  wordGeo.attributes.customColor.needsUpdate = true;
+  wordGeo.attributes.size.needsUpdate = true;
+  wordGeo.attributes.pulse.needsUpdate = true;
+}
+
+function updateTokens(dt) {
+  for (let i = tokens.length - 1; i >= 0; i--) {
+    const t = tokens[i];
+    t.x += t.vx * dt;
+    t.y += t.vy * dt;
+    t.z += t.vz * dt;
+    t.vx *= 0.96; t.vy *= 0.96; t.vz *= 0.96;
+    t.life -= dt * 0.4;
+    if (t.life <= 0) { tokens.splice(i, 1); continue; }
+    
+    const i3 = i * 3;
+    const f = t.life;
+    tokenPos[i3] = t.x; tokenPos[i3+1] = t.y; tokenPos[i3+2] = t.z;
+    tokenCol[i3] = t.r*f; tokenCol[i3+1] = t.g*f; tokenCol[i3+2] = t.b*f;
+    tokenSizes[i] = 0.3 * f;
+  }
+  
+  tokenGeo.setDrawRange(0, tokens.length);
+  tokenGeo.attributes.position.needsUpdate = true;
+  tokenGeo.attributes.color.needsUpdate = true;
+  tokenGeo.attributes.size.needsUpdate = true;
+}
+
+function updateLinks() {
+  for (let i = 0; i < links.length; i++) {
+    const l = links[i];
+    const w1 = words[l.i1];
+    const w2 = words[l.i2];
+    if (!w1 || !w2) continue;
+    
+    const i6 = i * 6;
+    linkPos[i6] = w1.x; linkPos[i6+1] = w1.y; linkPos[i6+2] = w1.z;
+    linkPos[i6+3] = w2.x; linkPos[i6+4] = w2.y; linkPos[i6+5] = w2.z;
+    
+    const r = (w1.r + w2.r) * 0.5 * l.strength * 0.6;
+    const g = (w1.g + w2.g) * 0.5 * l.strength * 0.6;
+    const b = (w1.b + w2.b) * 0.5 * l.strength * 0.6;
+    linkCol[i6] = r; linkCol[i6+1] = g; linkCol[i6+2] = b;
+    linkCol[i6+3] = r; linkCol[i6+4] = g; linkCol[i6+5] = b;
+  }
+  
+  linkGeo.setDrawRange(0, links.length * 2);
+  linkGeo.attributes.position.needsUpdate = true;
+  linkGeo.attributes.color.needsUpdate = true;
+}
+
+let bigBangDone = false;
+
+// ❌ УБРАНО СЖАТИЕ ЯДРА — сразу взрыв
+function triggerBigBang() {
+  explode();
+}
+
+function explode() {
+  // Ударная волна
+  const sw = new THREE.Mesh(
+    new THREE.RingGeometry(0.1, 0.8, 48),
+    new THREE.MeshBasicMaterial({
+      color: 0xffffff, transparent: true, opacity: 0.7,
+      side: THREE.DoubleSide, depthWrite: false
+    })
+  );
+  scene.add(sw);
+  
+  let t = 0;
+  function expand() {
+    t += 0.02;
+    if (t < 1) {
+      sw.scale.set(1 + t*60, 1 + t*60, 1 + t*60);
+      sw.material.opacity = 0.7 * (1 - t);
+      requestAnimationFrame(expand);
+    } else {
+      scene.remove(sw);
+      sw.geometry.dispose(); sw.material.dispose();
+    }
+  }
+  expand();
+  
+  // Разлёт частиц из центра
+  for (let i = 0; i < 200; i++) {
+    const c = new THREE.Color().setHSL(Math.random(), 0.7, 0.5);
+    spawnTokens({x:0,y:0,z:0}, c, 1);
+  }
+  
+  // Камера отлетает
+  const startPos = camera.position.clone();
+  const endPos = new THREE.Vector3(0, 15, 80);
+  let ct = 0;
+  function zoom() {
+    ct += 0.01;
+    if (ct < 1) {
+      const e = 1 - Math.pow(1 - ct, 3);
+      camera.position.lerpVectors(startPos, endPos, e);
+      requestAnimationFrame(zoom);
+    }
+  }
+  zoom();
+}
+
+let isGenerating = false;
+let lastDomUpdate = 0;
+
+async function generate(question) {
+  if (isGenerating) return;
+  isGenerating = true;
+  statusEl.textContent = 'большой взрыв...';
+  thoughtEl.textContent = '';
+  
+  if (!bigBangDone) {
+    triggerBigBang();
+    await sleep(1500); // ← меньше ждём, т.к. нет сжатия
+    bigBangDone = true;
+  }
+  
+  statusEl.textContent = 'думаю...';
+  
+  const systemPrompt = 
+    'Ты — глубокий мыслитель. Отвечай на вопрос в два этапа.\n\n' +
+    'ЭТАП 1: Думай вслух. Размышляй, сомневайся, ищи связи. ' +
+    'Пиши 10-15 коротких фраз. Это черновик мысли.\n\n' +
+    'ЭТАП 2: После маркера [ОТВЕТ] дай чёткий, красивый, ' +
+    'развёрнутый ответ на вопрос. 5-8 предложений. ' +
+    'Пиши ясно и глубоко.\n\n' +
+    'Формат:\n' +
+    'мысль мысль мысль...\n' +
+    '[ОТВЕТ]\n' +
+    'Финальный ответ...';
+  
+  try {
+    const response = await fetch(API_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: MODEL,
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: question }
+        ],
+        temperature: 0.85,
+        max_tokens: 1500,
+        stream: true
+      })
+    });
+    
+    if (!response.ok) throw new Error('HTTP ' + response.status);
+    
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let thoughtBuffer = '';
+    
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop();
+      
+      for (const line of lines) {
+        if (!line.startsWith('data: ')) continue;
+        const data = line.slice(6).trim();
+        if (data === '[DONE]') continue;
+        
+        try {
+          const json = JSON.parse(data);
+          const token = json.choices?.[0]?.delta?.content;
+          if (!token) continue;
+          
+          thoughtBuffer += token;
+          
+          const now = Date.now();
+          if (now - lastDomUpdate > 100) {
+            thoughtEl.textContent = thoughtBuffer.slice(-400);
+            lastDomUpdate = now;
+          }
+          
+          const ws = token.split(/\s+/).filter(w => w.length > 1);
+          for (const w of ws) {
+            const clean = w.replace(/[^\wа-яё]/gi, '').toLowerCase();
+            if (clean) spawnWord(clean);
+          }
+        } catch (e) {}
+      }
+    }
+    
+    thoughtEl.textContent = thoughtBuffer.slice(-400);
+    isGenerating = false;
+    statusEl.textContent = 'готово (' + words.length + ' слов, ' + links.length + ' связей)';
+    
+  } catch (e) {
+    statusEl.textContent = 'ошибка: ' + e.message;
+    isGenerating = false;
+  }
+}
+
+function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+const clock = new THREE.Clock();
+
+function animate() {
+  requestAnimationFrame(animate);
+  const dt = Math.min(clock.getDelta(), 0.05);
+  const time = clock.getElapsedTime();
+  
+  wordMat.uniforms.time.value = time;
+  
+  updateWords(dt);
+  updateTokens(dt);
+  updateLinks();
+  
+  nebulae.forEach(n => {
+    n.rotation.y += n.userData.rs;
+  });
+  dustCloud.rotation.y += 0.0002;
+  
+  // ❌ УБРАНА ПУЛЬСАЦИЯ ЯДРА
+  
+  controls.update();
+  composer.render();
+}
+
+function clearScene() {
+  words = [];
+  tokens = [];
+  links = [];
+  simCache.clear();
+  bigBangDone = false;
+  thoughtEl.textContent = '';
+  camera.position.set(0, 10, 50);
+  controls.target.set(0, 0, 0);
+  wordGeo.setDrawRange(0, 0);
+  tokenGeo.setDrawRange(0, 0);
+  linkGeo.setDrawRange(0, 0);
+}
+
+function saveSnapshot() {
+  composer.render();
+  const a = document.createElement('a');
+  a.download = 'cosmogenesis-' + Date.now() + '.png';
+  a.href = renderer.domElement.toDataURL('image/png');
+  a.click();
+}
+
+runBtn.addEventListener('click', () => {
+  const q = questionInput.value.trim();
+  if (!q || isGenerating) return;
+  generate(q);
+});
+
+clearBtn.addEventListener('click', () => { if (!isGenerating) clearScene(); });
+saveBtn.addEventListener('click', saveSnapshot);
+
+questionInput.addEventListener('keydown', e => {
+  if (e.key === 'Enter' && !isGenerating) runBtn.click();
+});
+
+window.addEventListener('resize', () => {
+  camera.aspect = innerWidth / innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+  composer.setSize(innerWidth, innerHeight);
+});
+
+animate();
+statusEl.textContent = 'готов (введите вопрос)';
+
+</script>
+</body>
+</html>
